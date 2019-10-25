@@ -3,14 +3,18 @@ package clusterconfig
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	kubescheme "k8s.io/client-go/kubernetes/scheme"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/klog"
@@ -18,6 +22,7 @@ import (
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/client-go/config/clientset/versioned/scheme"
 	configv1client "github.com/openshift/client-go/config/clientset/versioned/typed/config/v1"
+	"github.com/openshift/oc/pkg/cli/admin/inspect"
 
 	"github.com/openshift/insights-operator/pkg/record"
 )
@@ -44,7 +49,117 @@ func New(client configv1client.ConfigV1Interface, coreClient corev1client.CoreV1
 
 var reInvalidUIDCharacter = regexp.MustCompile(`[^a-z0-9\-]`)
 
+var cInspect = make(chan struct{}, 1)
+
 func (i *Gatherer) Gather(ctx context.Context, recorder record.Interface) error {
+	select {
+	case cInspect <- struct{}{}:
+		klog.Infoln("[INSPECT] -------- BEGIN --------")
+		setupStartTime := time.Now()
+
+		ioStreams := genericclioptions.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr}
+		inspectOptions := inspect.NewInspectOptions(ioStreams)
+
+		klog.Infoln("[INSPECT] OK -- inspect.NewInspectOptions")
+
+		err := inspectOptions.Complete(nil, []string{"clusteroperators"})
+		if err != nil {
+			klog.Errorln(err)
+			return err
+		}
+
+		klog.Infoln("[INSPECT] OK -- inspectOptions.Complete")
+
+		err = inspectOptions.Validate()
+		if err != nil {
+			klog.Errorln(err)
+			return err
+		}
+
+		klog.Infoln("[INSPECT] OK -- inspectOptions.Validate")
+
+		go func() {
+			klog.Infoln("[INSPECT] GOROUTINE ALIVE")
+
+			runStartTime := time.Now()
+			err = inspectOptions.Run()
+
+			if err != nil {
+				klog.Errorln("[INSPECT] ERROR -- inspectOptions.Run --", err)
+			} else {
+				klog.Infoln("[INSPECT] OK -- inspectOptions.Run")
+			}
+
+			<-cInspect
+
+			klog.Infoln("[INSPECT] -------- END --", time.Since(runStartTime).Seconds(), "seconds", "--------")
+		}()
+
+		klog.Infoln("[INSPECT] -------- GOROUTINE SPAWNED --", time.Since(setupStartTime).Seconds(), "seconds", "--------")
+
+	default:
+		klog.Infoln("[INSPECT] -------- GOROUTINE ALREADY RUNNING --------")
+	}
+
+	klog.Infoln("[INSPECT] -------- RECORD STAGE BEGIN --------")
+
+	// files, err := ioutil.ReadDir(".")
+
+	// if err != nil {
+	// 	klog.Errorln(err)
+	// 	// return err
+	// } else {
+	// 	for _, f := range files {
+	// 		name := f.Name()
+	// 		modTime := f.ModTime()
+	// 		since := time.Since(modTime).Seconds()
+
+	// 		// klog.Infoln("[INSPECT] File:", name, modTime, since)
+
+	// 		if f.IsDir() && strings.HasPrefix(name, "inspect.local.") && since < 60 {
+	// 			klog.Infoln("[INSPECT] Dir Hit:", name)
+
+	// 			dirPath := path.Join(".", name)
+	// 			err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+	// 				if info.Mode().IsRegular() && filepath.Ext(info.Name()) == ".yaml" {
+	// 					// klog.Infoln("[INSPECT] YAML:", path)
+	// 					recorder.Record(record.Record{Name: path, Captured: time.Now(), LocalPath: path})
+	// 				}
+	// 				return err
+	// 			})
+
+	// 			if err != nil {
+	// 				klog.Errorln(err)
+	// 				// return err
+	// 			}
+	// 		}
+	// 	}
+	// }
+
+	re := regexp.MustCompile(`^.*inspect\.local\.\d+`)
+
+	recordCounter := 0
+
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if info.Mode().IsRegular() && filepath.Ext(info.Name()) == ".yaml" && time.Since(info.ModTime()).Seconds() < 60 {
+			recorder.Record(record.Record{Name: re.ReplaceAllLiteralString(path, "config/inspect"), Captured: time.Now(), LocalPath: path})
+			recordCounter++
+		}
+
+		if err != nil {
+			klog.Errorln(err)
+		}
+
+		return err
+	})
+
+	if err != nil {
+		klog.Errorln(err)
+		return err
+	}
+
+	klog.Infoln("[INSPECT] -------- RECORD STAGE END --", recordCounter, "YAML files recorded --------")
+
 	return record.Collect(ctx, recorder,
 		func() ([]record.Record, []error) {
 			config, err := i.client.ClusterOperators().List(metav1.ListOptions{})
@@ -172,16 +287,6 @@ func (i *Gatherer) Gather(ctx context.Context, recorder record.Interface) error 
 			}
 			return []record.Record{{Name: "config/ingress", Item: IngressAnonymizer{config}}}, nil
 		},
-		func() ([]record.Record, []error) {
-			config, err := i.client.Proxies().Get("cluster", metav1.GetOptions{})
-			if errors.IsNotFound(err) {
-				return nil, nil
-			}
-			if err != nil {
-				return nil, []error{err}
-			}
-			return []record.Record{{Name: "config/proxy", Item: ProxyAnonymizer{config}}}, nil
-		},
 	)
 }
 
@@ -229,33 +334,6 @@ type IngressAnonymizer struct{ *configv1.Ingress }
 func (a IngressAnonymizer) Marshal(_ context.Context) ([]byte, error) {
 	a.Ingress.Spec.Domain = anonymizeURL(a.Ingress.Spec.Domain)
 	return runtime.Encode(serializer, a.Ingress)
-}
-
-type ProxyAnonymizer struct{ *configv1.Proxy }
-
-func (a ProxyAnonymizer) Marshal(_ context.Context) ([]byte, error) {
-	a.Proxy.Spec.HTTPProxy = anonymizeURLCSV(a.Proxy.Spec.HTTPProxy)
-	a.Proxy.Spec.HTTPSProxy = anonymizeURLCSV(a.Proxy.Spec.HTTPSProxy)
-	a.Proxy.Spec.NoProxy = anonymizeURLCSV(a.Proxy.Spec.NoProxy)
-	a.Proxy.Spec.ReadinessEndpoints = anonymizeURLSlice(a.Proxy.Spec.ReadinessEndpoints)
-	a.Proxy.Status.HTTPProxy = anonymizeURLCSV(a.Proxy.Status.HTTPProxy)
-	a.Proxy.Status.HTTPSProxy = anonymizeURLCSV(a.Proxy.Status.HTTPSProxy)
-	a.Proxy.Status.NoProxy = anonymizeURLCSV(a.Proxy.Status.NoProxy)
-	return runtime.Encode(serializer, a.Proxy)
-}
-
-func anonymizeURLCSV(s string) string {
-	strs := strings.Split(s, ",")
-	outSlice := anonymizeURLSlice(strs)
-	return strings.Join(outSlice, ",")
-}
-
-func anonymizeURLSlice(in []string) []string {
-	outSlice := []string{}
-	for _, str := range in {
-		outSlice = append(outSlice, anonymizeURL(str))
-	}
-	return outSlice
 }
 
 var reURL = regexp.MustCompile(`[^\.\-/\:]`)

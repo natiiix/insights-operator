@@ -24,6 +24,7 @@ type Record struct {
 
 	Fingerprint string
 	Item        Marshalable
+	LocalPath   string
 }
 
 type Marshalable interface {

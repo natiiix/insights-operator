@@ -73,10 +73,29 @@ func (r *Recorder) Record(record record.Record) error {
 		at = time.Now()
 	}
 
-	// TODO: handle records that are slow to capture
-	data, err := record.Item.Marshal(context.TODO())
-	if err != nil {
-		return err
+	var data []byte
+
+	if len(record.LocalPath) == 0 {
+		// TODO: handle records that are slow to capture
+		d, err := record.Item.Marshal(context.TODO())
+		if err != nil {
+			return err
+		}
+
+		data = d
+	} else {
+		f, err := os.Open(record.LocalPath)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+
+		d, err := ioutil.ReadAll(f)
+		if err != nil {
+			return err
+		}
+
+		data = d
 	}
 
 	r.records[record.Name] = &memoryRecord{
