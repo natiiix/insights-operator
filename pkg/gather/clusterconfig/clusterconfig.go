@@ -3,7 +3,9 @@ package clusterconfig
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -98,67 +100,57 @@ func (i *Gatherer) Gather(ctx context.Context, recorder record.Interface) error 
 		klog.Infoln("[INSPECT] -------- GOROUTINE SPAWNED --", time.Since(setupStartTime).Seconds(), "seconds", "--------")
 
 	default:
-		klog.Infoln("[INSPECT] -------- GOROUTINE ALREADY RUNNING --------")
-	}
+		klog.Infoln("[INSPECT] -------- GOROUTINE RUNNING -- RECORD STAGE BEGIN --------")
 
-	klog.Infoln("[INSPECT] -------- RECORD STAGE BEGIN --------")
-
-	// files, err := ioutil.ReadDir(".")
-
-	// if err != nil {
-	// 	klog.Errorln(err)
-	// 	// return err
-	// } else {
-	// 	for _, f := range files {
-	// 		name := f.Name()
-	// 		modTime := f.ModTime()
-	// 		since := time.Since(modTime).Seconds()
-
-	// 		// klog.Infoln("[INSPECT] File:", name, modTime, since)
-
-	// 		if f.IsDir() && strings.HasPrefix(name, "inspect.local.") && since < 60 {
-	// 			klog.Infoln("[INSPECT] Dir Hit:", name)
-
-	// 			dirPath := path.Join(".", name)
-	// 			err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
-	// 				if info.Mode().IsRegular() && filepath.Ext(info.Name()) == ".yaml" {
-	// 					// klog.Infoln("[INSPECT] YAML:", path)
-	// 					recorder.Record(record.Record{Name: path, Captured: time.Now(), LocalPath: path})
-	// 				}
-	// 				return err
-	// 			})
-
-	// 			if err != nil {
-	// 				klog.Errorln(err)
-	// 				// return err
-	// 			}
-	// 		}
-	// 	}
-	// }
-
-	re := regexp.MustCompile(`^.*inspect\.local\.\d+`)
-
-	recordCounter := 0
-
-	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
-		if info.Mode().IsRegular() && filepath.Ext(info.Name()) == ".yaml" && time.Since(info.ModTime()).Seconds() < 60 {
-			recorder.Record(record.Record{Name: re.ReplaceAllLiteralString(path, "config/inspect"), Captured: time.Now(), LocalPath: path})
-			recordCounter++
-		}
+		const baseDirPath = "."
+		files, err := ioutil.ReadDir(baseDirPath)
 
 		if err != nil {
 			klog.Errorln(err)
+			return err
 		}
 
-		return err
-	})
+		// Find most recent inspect directory.
+		var lastInspectDir os.FileInfo = nil
 
-	if err != nil {
-		klog.Errorln(err)
-		return err
+		for _, f := range files {
+			if f.IsDir() && strings.HasPrefix(f.Name(), "inspect.local.") {
+				if lastInspectDir == nil || f.ModTime().Sub(lastInspectDir.ModTime()) > 0 {
+					lastInspectDir = f
+				}
+			}
+		}
+
+		recordCounter := 0
+
+		if lastInspectDir == nil {
+			klog.Infoln("[INSPECT] WARNING: No inspect directory found")
+		} else {
+			// Find all YAML files in the inspect directory.
+			inspectDirPath := path.Join(baseDirPath, lastInspectDir.Name())
+			re := regexp.MustCompile(`^.*inspect\.local\.\d+`)
+
+			err = filepath.Walk(inspectDirPath, func(path string, info os.FileInfo, err error) error {
+				if info.Mode().IsRegular() && filepath.Ext(info.Name()) == ".yaml" {
+					recorder.Record(record.Record{Name: re.ReplaceAllLiteralString(path, "config/inspect"), Captured: time.Now(), LocalPath: path})
+					recordCounter++
+				}
+
+				if err != nil {
+					klog.Errorln(err)
+				}
+
+				return err
+			})
+
+			if err != nil {
+				klog.Errorln(err)
+				return err
+			}
+		}
+
+		klog.Infoln("[INSPECT] -------- RECORD STAGE END --", recordCounter, "YAML files recorded --------")
 	}
-
-	klog.Infoln("[INSPECT] -------- RECORD STAGE END --", recordCounter, "YAML files recorded --------")
 
 	return record.Collect(ctx, recorder,
 		func() ([]record.Record, []error) {
