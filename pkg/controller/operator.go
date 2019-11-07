@@ -86,6 +86,7 @@ func (s *Support) Run(controller *controllercmd.ControllerContext) error {
 	if err != nil {
 		return err
 	}
+
 	configClient, err := configv1client.NewForConfig(controller.KubeConfig)
 	if err != nil {
 		return err
@@ -145,7 +146,6 @@ func (s *Support) Run(controller *controllercmd.ControllerContext) error {
 	// is permanently disabled, but if a client does exist the server may still disable reporting
 	uploader := insightsuploader.New(recorder, insightsClient, configObserver, statusReporter)
 	statusReporter.AddSources(uploader)
-
 
 	// Instrumentation goroutine initialization logic
 	if enabled := os.Getenv("IO_ENABLE_INSTRUMENTATION"); enabled == "true" {
