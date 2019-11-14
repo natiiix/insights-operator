@@ -9,13 +9,17 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"k8s.io/klog"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/pkg/version"
 	"k8s.io/client-go/rest"
+	kcmdutil "k8s.io/kubectl/pkg/cmd/util"
 
 	apiconfigv1 "github.com/openshift/api/config/v1"
 	configv1client "github.com/openshift/client-go/config/clientset/versioned/typed/config/v1"
@@ -30,6 +34,7 @@ import (
 	"github.com/openshift/insights-operator/pkg/gather/clusterconfig"
 	"github.com/openshift/insights-operator/pkg/insights/insightsclient"
 	"github.com/openshift/insights-operator/pkg/insights/insightsuploader"
+	"github.com/openshift/insights-operator/pkg/mustgather"
 	"github.com/openshift/insights-operator/pkg/record/diskrecorder"
 )
 
@@ -169,6 +174,39 @@ func (s *Support) Run(controller *controllercmd.ControllerContext) error {
 				triggers, err := readListOfTriggers(s.Controller.Endpoint, API_PREFIX, clusterID)
 				if err != nil {
 					klog.Errorf("Unable to fetch trigger list: %v", err)
+				}
+				// TODO: Replace with a request to the instrumentation service.
+				// Just to mock that sometimes running must-gather is requested and sometimes it's not.
+				// mustGatherRequested := time.Now().Unix()%10 == 0
+				mustGatherRequested := true
+
+				klog.Infoln("Insights operator instrumentation is running")
+
+				if mustGatherRequested {
+					klog.Infoln("Must-gather requested")
+					// TODO: Run must-gather.
+					// Emulates delay caused by running must-gather.
+					// The real delay will most likely be upwards of 5 minutes.
+					// time.Sleep(10 * time.Second)
+
+					// cmds := &cobra.Command{}
+
+					// mg := mustgather.NewMustGatherOptionsDefaultStreams()
+					// kubeConfigFlags := genericclioptions.NewConfigFlags(true)
+					// kubeConfigFlags.AddFlags(cmds.PersistentFlags())
+					// matchVersionKubeConfigFlags := kcmdutil.NewMatchVersionFlags(kubeConfigFlags)
+					// matchVersionKubeConfigFlags.AddFlags(cmds.PersistentFlags())
+					// cmds.PersistentFlags().AddGoFlagSet(flag.CommandLine)
+					// f := kcmdutil.NewFactory(matchVersionKubeConfigFlags)
+
+					mg := mustgather.NewMustGatherOptionsDefaultStreams()
+					f := kcmdutil.NewFactory(kcmdutil.NewMatchVersionFlags(genericclioptions.NewConfigFlags(true)))
+
+					mg.Complete(f, &cobra.Command{}, []string{})
+					mg.Validate()
+					mg.Run()
+
+					klog.Infoln("Must-gather finished")
 				}
 				if len(triggers) > 0 {
 					klog.Infof("There is some triggers")
