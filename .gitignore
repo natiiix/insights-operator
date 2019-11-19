@@ -2,3 +2,4 @@
 inspect.local.*
 must-gather.local.*
 /*.log
+/main
