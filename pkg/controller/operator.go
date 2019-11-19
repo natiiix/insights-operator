@@ -167,53 +167,38 @@ func (s *Support) Run(controller *controllercmd.ControllerContext) error {
 				return
 			}
 
-			klog.Infoln("Cluster ID:", clusterID, "| Error:", err)
+			klog.Infoln("Cluster ID:", clusterID)
+
+			if err != nil {
+				klog.Errorln(err)
+				return
+			}
+
 			for {
 				klog.Infoln("Insights operator instrumentation is running")
 				klog.Infoln("Must-gather requested")
-				triggers, err := readListOfTriggers(s.Controller.Endpoint, API_PREFIX, clusterID)
+				triggers, err := readListOfTriggers(s.Controller.Endpoint, API_PREFIX, string(clusterID))
 				if err != nil {
 					klog.Errorf("Unable to fetch trigger list: %v", err)
-				}
-				// TODO: Replace with a request to the instrumentation service.
-				// Just to mock that sometimes running must-gather is requested and sometimes it's not.
-				// mustGatherRequested := time.Now().Unix()%10 == 0
-				mustGatherRequested := true
-
-				klog.Infoln("Insights operator instrumentation is running")
-
-				if mustGatherRequested {
-					klog.Infoln("Must-gather requested")
-					// TODO: Run must-gather.
-					// Emulates delay caused by running must-gather.
-					// The real delay will most likely be upwards of 5 minutes.
-					// time.Sleep(10 * time.Second)
-
-					// cmds := &cobra.Command{}
-
-					// mg := mustgather.NewMustGatherOptionsDefaultStreams()
-					// kubeConfigFlags := genericclioptions.NewConfigFlags(true)
-					// kubeConfigFlags.AddFlags(cmds.PersistentFlags())
-					// matchVersionKubeConfigFlags := kcmdutil.NewMatchVersionFlags(kubeConfigFlags)
-					// matchVersionKubeConfigFlags.AddFlags(cmds.PersistentFlags())
-					// cmds.PersistentFlags().AddGoFlagSet(flag.CommandLine)
-					// f := kcmdutil.NewFactory(matchVersionKubeConfigFlags)
-
-					mg := mustgather.NewMustGatherOptionsDefaultStreams()
-					f := kcmdutil.NewFactory(kcmdutil.NewMatchVersionFlags(genericclioptions.NewConfigFlags(true)))
-
-					mg.Complete(f, &cobra.Command{}, []string{})
-					mg.Validate()
-					mg.Run()
-
-					klog.Infoln("Must-gather finished")
-				}
-				if len(triggers) > 0 {
-					klog.Infof("There is some triggers")
-					time.Sleep(time.Minute)
+				} else if len(triggers) > 0 {
+					klog.Infof("There are some triggers")
 					for _, trigger := range triggers {
 						klog.Infof(strconv.Itoa(trigger.Id))
-						err := ackTrigger(s.Controller.Endpoint, API_PREFIX, clusterID, strconv.Itoa(trigger.Id))
+
+						klog.Infoln("Must-gather requested")
+
+						mg := mustgather.NewMustGatherOptionsDefaultStreams()
+						f := kcmdutil.NewFactory(kcmdutil.NewMatchVersionFlags(genericclioptions.NewConfigFlags(true)))
+
+						err = mg.Complete(f, &cobra.Command{}, []string{})
+						err = mg.Validate()
+						err = mg.Run()
+
+						// TODO: Check errors
+
+						klog.Infoln("Must-gather finished")
+
+						err := ackTrigger(s.Controller.Endpoint, API_PREFIX, string(clusterID), strconv.Itoa(trigger.Id))
 						if err != nil {
 							klog.Errorf("Unable to ACK trigger: %v", err)
 						}
