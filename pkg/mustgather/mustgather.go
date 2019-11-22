@@ -306,9 +306,6 @@ func (o *MustGatherOptions) Run() error {
 			log("downloading gather output")
 			pod, err = o.Client.CoreV1().Pods(pod.Namespace).Get(pod.Name, metav1.GetOptions{})
 
-			fmt.Print("Waiting (press ENTER to continue)...")
-			bufio.NewReader(os.Stdin).ReadString('\n')
-
 			if err != nil {
 				log("unable to get pod: %v\n", err)
 				errs <- err

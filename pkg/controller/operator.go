@@ -42,7 +42,7 @@ type Support struct {
 	config.Controller
 }
 
-func getCLusterId(ctrlCtx *controllercmd.ControllerContext) (apiconfigv1.ClusterID, error) {
+func getClusterID(ctrlCtx *controllercmd.ControllerContext) (apiconfigv1.ClusterID, error) {
 	instrClient, err := configv1client.NewForConfig(ctrlCtx.KubeConfig)
 	if err != nil {
 		return "", err
@@ -154,13 +154,13 @@ func (s *Support) Run(controller *controllercmd.ControllerContext) error {
 
 	// Instrumentation goroutine initialization logic
 	if enabled := os.Getenv("IO_ENABLE_INSTRUMENTATION"); enabled == "true" {
-		period := time.Duration(60)
-		p, err := strconv.ParseInt(os.Getenv("IO_READ_TRIGGER_PERIOD"), 10, 64)
-		if err != nil {
-			period = time.Duration(p)
+		period := time.Minute
+		if p, err := strconv.ParseInt(os.Getenv("IO_READ_TRIGGER_PERIOD"), 10, 64); err == nil {
+			period = time.Duration(p) * time.Second
 		}
+
 		go func(ctrlCtx *controllercmd.ControllerContext, interval time.Duration) {
-			clusterID, err := getCLusterId(ctrlCtx)
+			clusterID, err := getClusterID(ctrlCtx)
 
 			if err != nil {
 				klog.Errorf("Unable to get Cluster ID: %v", err)
@@ -176,16 +176,13 @@ func (s *Support) Run(controller *controllercmd.ControllerContext) error {
 
 			for {
 				klog.Infoln("Insights operator instrumentation is running")
-				klog.Infoln("Must-gather requested")
 				triggers, err := readListOfTriggers(s.Controller.Endpoint, API_PREFIX, string(clusterID))
 				if err != nil {
 					klog.Errorf("Unable to fetch trigger list: %v", err)
 				} else if len(triggers) > 0 {
-					klog.Infof("There are some triggers")
+					klog.Infoln("Triggers available:", len(triggers))
 					for _, trigger := range triggers {
-						klog.Infof(strconv.Itoa(trigger.Id))
-
-						klog.Infoln("Must-gather requested")
+						klog.Infoln("Must-gather requested -- trigger ID:", strconv.Itoa(trigger.Id))
 
 						mg := mustgather.NewMustGatherOptionsDefaultStreams()
 						f := kcmdutil.NewFactory(kcmdutil.NewMatchVersionFlags(genericclioptions.NewConfigFlags(true)))
@@ -203,8 +200,10 @@ func (s *Support) Run(controller *controllercmd.ControllerContext) error {
 							klog.Errorf("Unable to ACK trigger: %v", err)
 						}
 					}
+				} else {
+					klog.Infoln("No triggers")
 				}
-				time.Sleep(interval * time.Second)
+				time.Sleep(interval)
 			}
 		}(controller, period)
 	} else {
