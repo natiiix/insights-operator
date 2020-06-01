@@ -171,7 +171,7 @@ func (s *Support) Run(controller *controllercmd.ControllerContext) error {
 			for {
 				klog.Infoln("Insights operator instrumentation is running")
 				klog.Infoln("Must-gather requested")
-				triggers, err := readListOfTriggers(s.Controller.Endpoint, API_PREFIX, clusterID)
+				triggers, err := readListOfTriggers(s.Controller.Endpoint, API_PREFIX, string(clusterID))
 				if err != nil {
 					klog.Errorf("Unable to fetch trigger list: %v", err)
 				}
@@ -213,7 +213,7 @@ func (s *Support) Run(controller *controllercmd.ControllerContext) error {
 					time.Sleep(time.Minute)
 					for _, trigger := range triggers {
 						klog.Infof(strconv.Itoa(trigger.Id))
-						err := ackTrigger(s.Controller.Endpoint, API_PREFIX, clusterID, strconv.Itoa(trigger.Id))
+						err := ackTrigger(s.Controller.Endpoint, API_PREFIX, string(clusterID), strconv.Itoa(trigger.Id))
 						if err != nil {
 							klog.Errorf("Unable to ACK trigger: %v", err)
 						}

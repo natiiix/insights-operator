@@ -4,6 +4,7 @@ go 1.12
 
 require (
 	github.com/coreos/bbolt v1.3.3 // indirect
+	github.com/fzipp/gocyclo v0.0.0-20150627053110-6acd4345c835 // indirect
 	github.com/getsentry/raven-go v0.2.1-0.20190513200303-c977f96e1095 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.11.3 // indirect
 	github.com/onsi/ginkgo v1.10.2 // indirect
@@ -24,6 +25,7 @@ require (
 	k8s.io/component-base v0.0.0
 	k8s.io/klog v1.0.0
 	k8s.io/kubectl v0.0.0
+	k8s.io/kubernetes v0.0.0-00010101000000-000000000000
 )
 
 replace (

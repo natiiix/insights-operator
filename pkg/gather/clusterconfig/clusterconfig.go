@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/sets"
 	kubescheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/kubernetes/typed/certificates/v1beta1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/klog"
 
@@ -200,6 +201,32 @@ func (i *Gatherer) Gather(ctx context.Context, recorder record.Interface) error 
 				return nil, []error{err}
 			}
 			return []record.Record{{Name: "config/proxy", Item: ProxyAnonymizer{config}}}, nil
+		},
+		func() ([]record.Record, []error) {
+			csrClient := v1beta1.New(i.client.RESTClient())
+			li, err := csrClient.CertificateSigningRequests().List(metav1.ListOptions{})
+			// _ = csrClient.CertificateSigningRequests()
+
+			// result := &certificates.CertificateSigningRequestList{}
+			// // i.client.RESTClient()
+			// // i.coreClient.RESTClient()
+			// err := i.client.RESTClient().
+			// 	Get().
+			// 	Resource("certificatesigningrequests").
+			// 	VersionedParams(&metav1.ListOptions{}, scheme.ParameterCodec).
+			// 	Timeout(time.Minute).
+			// 	Do().
+			// 	Into(result)
+
+			if err != nil {
+				return nil, []error{err}
+			}
+
+			klog.Infof("%#v\n", li)
+
+			// `Anonymizer` is most probably NOT the right thing to use.
+			// return []record.Record{{Name: "config/certificatesigningrequests", Item: Anonymizer{li}}}, nil
+			return []record.Record{}, nil
 		},
 	)
 }
