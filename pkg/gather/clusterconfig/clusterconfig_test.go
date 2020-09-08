@@ -346,15 +346,13 @@ func TestGatherContainerImages(t *testing.T) {
 					Namespace: fakeNamespace,
 					Name:      fmt.Sprintf("pod%d", index),
 				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{
 						{
 							Name:  fmt.Sprintf("container%d", index),
 							Image: containerImage,
 						},
 					},
-				},
-				Status: corev1.PodStatus{
 					Phase: corev1.PodRunning,
 				},
 			})

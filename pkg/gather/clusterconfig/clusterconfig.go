@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -37,6 +36,7 @@ import (
 	configv1client "github.com/openshift/client-go/config/clientset/versioned/typed/config/v1"
 	imageregistryv1 "github.com/openshift/client-go/imageregistry/clientset/versioned/typed/imageregistry/v1"
 	networkv1client "github.com/openshift/client-go/network/clientset/versioned/typed/network/v1"
+	"github.com/openshift/library-go/pkg/image/reference"
 
 	"github.com/openshift/insights-operator/pkg/record"
 	"github.com/openshift/insights-operator/pkg/record/diskrecorder"
@@ -57,6 +57,10 @@ const (
 	// This number has been rounded to 1000 for simplicity.
 	// Formerly, the `500 * 1024 / 450` expression was used instead.
 	metricsAlertsLinesLimit = 1000
+
+	// Maximum number of container images to collect.
+	// On average, information about one image takes up roughly 100 raw bytes.
+	containerImageLimit = 1000
 )
 
 var (
@@ -74,8 +78,6 @@ var (
 
 	// logTailLines sets maximum number of lines to fetch from pod logs
 	logTailLines = int64(100)
-
-	imageHostRegex = regexp.MustCompile(`(^|\.)(openshift\.org|registry\.redhat\.io|registry\.access\.redhat\.com)$`)
 
 	// lineSep is the line separator used by the alerts metric
 	lineSep = []byte{'\n'}
@@ -213,12 +215,10 @@ func GatherContainerImages(i *Gatherer) func() ([]record.Record, []error) {
 	return func() ([]record.Record, []error) {
 		records := []record.Record{}
 
-		contInfo := ContainerInfo{
-			Images:     ContainerImageSet{},
-			Containers: PodsWithAge{},
-		}
-		// Cache for image indices in the collected set of container image.
-		image2idx := map[string]int{}
+		// Cache for the temporary image count list.
+		img2month2count := map[string]map[string]int{}
+
+		gatherErrors := []error{}
 
 		// Use the Limit and Continue fields to request the pod information in chunks.
 		continueValue := ""
@@ -237,22 +237,41 @@ func GatherContainerImages(i *Gatherer) func() ([]record.Record, []error) {
 				if strings.HasPrefix(pod.Namespace, "openshift") && hasContainerInCrashloop(podPtr) {
 					records = append(records, record.Record{Name: fmt.Sprintf("config/pod/%s/%s", pod.Namespace, pod.Name), Item: PodAnonymizer{podPtr}})
 				} else if pod.Status.Phase == corev1.PodRunning {
-					for _, container := range pod.Spec.Containers {
-						imageURL := container.Image
-						urlHost, err := forceParseURLHost(imageURL)
-						if err != nil {
-							klog.Errorf("unable to parse container image URL: %v", err)
-							continue
-						}
-						if imageHostRegex.MatchString(urlHost) {
-							imgIndex, ok := image2idx[imageURL]
-							if !ok {
-								imgIndex = contInfo.Images.Add(imageURL)
-								image2idx[imageURL] = imgIndex
+					gatherImages := func(containers []corev1.ContainerStatus) {
+						for _, container := range containers {
+							dockerRef, err := reference.Parse(container.Image)
+							if err != nil {
+								klog.Errorf("unable to parse container image specification: %v", err)
+								gatherErrors = append(gatherErrors, err)
+								continue
 							}
-							contInfo.Containers.Add(pod.CreationTimestamp.Time, imgIndex)
+
+							// Use the sha256 hash ID if available, otherwise use the full image spec.
+							imgMinimal := dockerRef.ID
+							if imgMinimal == "" {
+								imgMinimal = container.Image
+							}
+
+							const yyyyMmFormat = "2006-01"
+							startMonth := pod.CreationTimestamp.Time.UTC().Format(yyyyMmFormat)
+
+							if countMap, ok := img2month2count[imgMinimal]; ok {
+								var count int
+								if count, ok = countMap[startMonth]; !ok {
+									count = 0
+								}
+								countMap[startMonth] = count + 1
+							} else {
+								img2month2count[imgMinimal] = map[string]int{
+									startMonth: 1,
+								}
+							}
 						}
 					}
+
+					gatherImages(pod.Status.ContainerStatuses)
+					gatherImages(pod.Status.InitContainerStatuses)
+					gatherImages(pod.Status.EphemeralContainerStatuses)
 				}
 			}
 
@@ -264,10 +283,45 @@ func GatherContainerImages(i *Gatherer) func() ([]record.Record, []error) {
 			continueValue = pods.Continue
 		}
 
+		// Transform map into a list for sorting.
+		type tmpImageCount struct {
+			Image      string
+			StartMonth string
+			Count      int
+		}
+		imageCounts := []tmpImageCount{}
+		for img, countMap := range img2month2count {
+			for month, count := range countMap {
+				imageCounts = append(imageCounts, tmpImageCount{
+					Image:      img,
+					StartMonth: month,
+					Count:      count,
+				})
+			}
+		}
+
+		// Sort images from most common to least common.
+		sort.Slice(imageCounts, func(i, j int) bool {
+			return imageCounts[i].Count > imageCounts[j].Count
+		})
+
+		// Reconstruct the image information into the reported data structure.
+		contInfo := ContainerInfo{
+			Images:     ContainerImageSet{},
+			Containers: PodsWithAge{},
+		}
+		for i, img := range imageCounts {
+			if i >= containerImageLimit {
+				break
+			}
+			imgIndex := contInfo.Images.Add(img.Image)
+			contInfo.Containers.Add(img.StartMonth, imgIndex, img.Count)
+		}
+
 		return append(records, record.Record{
 			Name: "config/running_containers",
 			Item: record.JSONMarshaller{Object: contInfo},
-		}), nil
+		}), gatherErrors
 	}
 }
 
@@ -1217,17 +1271,15 @@ type RunningImages map[int]int
 type PodsWithAge map[string]RunningImages
 
 // Add inserts the specified container information into the data structure.
-func (p PodsWithAge) Add(startTime time.Time, image int) {
-	const YyyyMmFormat = "2006-01"
-	month := startTime.UTC().Format(YyyyMmFormat)
-	if imageMap, exists := p[month]; exists {
+func (p PodsWithAge) Add(startMonth string, image int, count int) {
+	if imageMap, exists := p[startMonth]; exists {
 		if _, exists := imageMap[image]; exists {
-			imageMap[image]++
+			imageMap[image] += count
 		} else {
-			imageMap[image] = 1
+			imageMap[image] = count
 		}
 	} else {
-		p[month] = RunningImages{image: 1}
+		p[startMonth] = RunningImages{image: count}
 	}
 }
 
@@ -1248,19 +1300,6 @@ func (is ContainerImageSet) Add(image string) int {
 type ContainerInfo struct {
 	Images     ContainerImageSet `json:"images"`
 	Containers PodsWithAge       `json:"containers"`
-}
-
-func forceParseURLHost(rawurl string) (string, error) {
-	// If the scheme isn't specified, the URL will not be parsed nicely and everything will end up in the "path"
-	if !strings.Contains(rawurl, "://") {
-		return forceParseURLHost("https://" + rawurl)
-	}
-
-	parsedURL, err := url.Parse(rawurl)
-	if err != nil {
-		return "", err
-	}
-	return parsedURL.Host, nil
 }
 
 func isContainerInCrashloop(status *corev1.ContainerStatus) bool {
