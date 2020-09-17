@@ -285,24 +285,26 @@ func GatherContainerImages(i *Gatherer) func() ([]record.Record, []error) {
 
 		// Transform map into a list for sorting.
 		type tmpImageCount struct {
-			Image      string
-			StartMonth string
-			Count      int
+			Image         string
+			CountPerMonth map[string]int
+			TotalCount    int
 		}
 		imageCounts := []tmpImageCount{}
 		for img, countMap := range img2month2count {
-			for month, count := range countMap {
-				imageCounts = append(imageCounts, tmpImageCount{
-					Image:      img,
-					StartMonth: month,
-					Count:      count,
-				})
+			totalCount := 0
+			for _, count := range countMap {
+				totalCount += count
 			}
+			imageCounts = append(imageCounts, tmpImageCount{
+				Image:         img,
+				TotalCount:    totalCount,
+				CountPerMonth: countMap,
+			})
 		}
 
 		// Sort images from most common to least common.
 		sort.Slice(imageCounts, func(i, j int) bool {
-			return imageCounts[i].Count > imageCounts[j].Count
+			return imageCounts[i].TotalCount > imageCounts[j].TotalCount
 		})
 
 		// Reconstruct the image information into the reported data structure.
@@ -310,12 +312,17 @@ func GatherContainerImages(i *Gatherer) func() ([]record.Record, []error) {
 			Images:     ContainerImageSet{},
 			Containers: PodsWithAge{},
 		}
-		for i, img := range imageCounts {
-			if i >= containerImageLimit {
+		totalEntries := 0
+		for _, img := range imageCounts {
+			if totalEntries >= containerImageLimit {
 				break
 			}
+
 			imgIndex := contInfo.Images.Add(img.Image)
-			contInfo.Containers.Add(img.StartMonth, imgIndex, img.Count)
+			for month, count := range img.CountPerMonth {
+				contInfo.Containers.Add(month, imgIndex, count)
+				totalEntries++
+			}
 		}
 
 		return append(records, record.Record{
